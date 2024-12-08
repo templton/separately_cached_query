@@ -3,19 +3,20 @@
 namespace app\orm;
 
 use app\orm\exceptions\NotValidLimitParamsException;
-use app\orm\exceptions\NotValidOrderDirection;
-use yii\db\Exception;
 
 class Query
 {
     private string $from = '';
     private ?string $alias = null;
-    private ?string $countExpression = null;
-    private int $limit = 0;
-    private int $offset = 0;
 
-    private ?string $orderByField = null;
-    private string $orderDirection = 'DESC';
+    private OrderByExpr $orderByExpr;
+    private LimitOffsetExpr $limitOffsetExpr;
+
+    public function __construct()
+    {
+        $this->orderByExpr = new OrderByExpr();
+        $this->limitOffsetExpr = new LimitOffsetExpr();
+    }
 
     /**
      * @var string[]
@@ -27,26 +28,14 @@ class Query
         $this->fields = $fields ?? [];
     }
 
-    public function orderBy(string $orderByName, ?string $direction): self
+    public function orderBy(string $orderByField, ?string $direction = null): self
     {
-        $this->orderByField = $orderByName;
-
-        if (!$direction) {
-            return $this;
-        }
-
-        $direction = strtoupper($direction);
-
-        if (!in_array($direction, ['ASC', 'DESC'])) {
-            throw new NotValidOrderDirection("Wrong order direction - $direction. Can be only DESC, ASC");
-        }
-
-        $this->orderDirection = $direction === 'ASC' ? 'ASC' : 'DESC';
+        $this->orderByExpr = new OrderByExpr($orderByField, $direction);
 
         return $this;
     }
 
-    public function select(?array $fields = null)
+    public function select(?array $fields = null): self
     {
         $query = new $this();
         $query->setFields($fields);
@@ -54,34 +43,46 @@ class Query
         return $query;
     }
 
-    public function from(string $table, ?string $aliase = null)
+    public function from(string $table, ?string $alias = null): self
     {
         $this->from = $table;
-        $this->alias = $aliase;
+        $this->alias = $alias;
 
         return $this;
     }
 
-    public function first()
+    public function first(): self
     {
-        if ($this->limit) {
-            $this->throwFirstLimitException();
+        if (!$this->limitOffsetExpr->isEmpty()) {
+            throw new NotValidLimitParamsException('command "->first" can not set if LIMIT was been used');
         }
 
-        $this->countExpression = 'first';
+        $this->limitOffsetExpr = new LimitOffsetExpr(1);
+
         return $this;
     }
 
-    public function limit(int $limit, ?int $offset = null)
+    public function limit(int $limit, ?int $offset = null): self
     {
-        if ($this->countExpression === 'first') {
-            $this->throwFirstLimitException();
+        if (!$this->limitOffsetExpr->isEmpty()) {
+            throw new NotValidLimitParamsException('LIMIT can not set if command "->first" was been used');
         }
 
-        $this->limit = $limit;
-        $this->offset = $offset ?? 0;
+        $this->limitOffsetExpr = new LimitOffsetExpr($limit, $offset);
 
         return $this;
+    }
+
+    public function getSql(): string
+    {
+        $select = $this->getSelectSql();
+        $from = $this->getFromSql();
+        $limitOffset = $this->limitOffsetExpr->getSql();
+        $orderSql = sprintf($this->orderByExpr->getSql(), $this->getTableAlias());
+
+        return "SELECT {$select} FROM {$from}"
+            . ($orderSql ? " {$orderSql}" : '')
+            . ($limitOffset ? " {$limitOffset}" : '');
     }
 
     private function getSelectSql(): string
@@ -102,56 +103,8 @@ class Query
         return $this->alias ? "{$this->from} {$this->alias}" : $this->from;
     }
 
-    public function getSql(): string
-    {
-        $select = $this->getSelectSql();
-        $from = $this->getFromSql();
-        $countSql = $this->getCountSql();
-        $pagination = $this->getPagination();
-        $direction = $this->getOrderSql();
-
-        return "SELECT {$select} FROM {$from}"
-            . ($countSql ? " {$countSql}" : '')
-            . ($pagination ? " {$pagination}" : '')
-            . ($direction ? " {$direction}" : '');
-    }
-
     private function getTableAlias(): string
     {
         return $this->alias ?? $this->from;
-    }
-
-    private function getCountSql(): string
-    {
-        if (!$this->countExpression) {
-            return '';
-        }
-
-        return 'LIMIT 1';
-    }
-
-    private function getPagination(): string
-    {
-        if (!$this->limit) {
-            return '';
-        }
-
-        return "LIMIT {$this->limit}" . ($this->offset ? " OFFSET {$this->offset}" : '');
-    }
-
-    private function getOrderSql(): string
-    {
-        if (!$this->orderByField) {
-            return '';
-        }
-
-        $alias = $this->getTableAlias();
-
-        return "ORDER BY {$alias}.{$this->orderByField} {$this->orderDirection}";
-    }
-
-    private function throwFirstLimitException(): void
-    {
-        throw new NotValidLimitParamsException('FIRST and LIMIT can be applied together');
     }
 }
