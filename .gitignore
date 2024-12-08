@@ -1,0 +1,10 @@
+.env
+.DS_Store
+.idea/
+log/
+docker/db
+car_files/
+src/supervisord.log
+src/supervisord.pid
+supervisord.log
+docker/pgdata/
